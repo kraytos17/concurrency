@@ -5,3 +5,7 @@ version = 3
 [[package]]
 name = "blocking_stack"
 version = "0.1.0"
+
+[[package]]
+name = "nonblocking_stack"
+version = "0.1.0"

@@ -64,7 +64,7 @@ impl<T> BlockingStack<T> {
     pub fn drain(&self) -> Vec<T> {
         let (lock, _) = &*self.stack;
         let mut stack = lock.lock().unwrap();
-        stack.drain(..).collect()
+        stack.drain(..).rev().collect()
     }
 
     pub fn capacity(&self) -> usize {
@@ -88,7 +88,7 @@ impl<T> BlockingStack<T> {
     {
         let (lock, _) = &*self.stack;
         let stack = lock.lock().unwrap();
-        stack.iter().cloned().rev().collect()
+        stack.clone()
     }
 }
 

@@ -1,4 +1,4 @@
 [workspace]
 
-members = ["blocking_stack"]
+members = ["blocking_stack", "nonblocking_stack"]
 resolver = "2"
