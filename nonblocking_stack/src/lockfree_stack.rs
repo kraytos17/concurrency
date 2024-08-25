@@ -46,7 +46,7 @@ impl<T> LockFreeStack<T> {
         if items.is_empty() {
             return;
         }
-        
+
         let mut new_head = Box::into_raw(Box::new(Node {
             value: items.pop().unwrap(),
             next: AtomicPtr::new(ptr::null_mut()),
@@ -212,13 +212,8 @@ impl<'a, T> Iterator for Iter<'a, T> {
         } else {
             unsafe {
                 let node = &*self.current;
-                if node.next.load(Ordering::Relaxed).is_null() {
-                    self.current = node.next.load(Ordering::Relaxed);
-                    Some(&node.value)
-                } else {
-                    self.current = node.next.load(Ordering::Relaxed);
-                    Some(&node.value)
-                }
+                self.current = node.next.load(Ordering::Relaxed);
+                Some(&node.value)
             }
         }
     }

@@ -19,9 +19,9 @@ fn main() {
     assert_eq!(stack.try_peek(), Some(&4));
     assert_eq!(stack.try_pop(), Some(4));
 
-    assert_eq!(stack.is_empty(), false);
+    assert!(!stack.is_empty());
     assert_eq!(stack.try_pop(), Some(1));
-    assert_eq!(stack.is_empty(), true);
+    assert!(stack.is_empty());
 
     stack.push_range(vec![5, 6, 7, 8]);
     assert_eq!(stack.try_pop(), Some(5));
@@ -29,7 +29,7 @@ fn main() {
 
     let popped = stack.try_pop_range(3);
     assert_eq!(popped, vec![7, 8]);
-    assert_eq!(stack.is_empty(), true);
+    assert!(stack.is_empty());
 
     stack.push_range(vec![9, 10, 11]);
     let vec = stack.to_vec();
@@ -43,7 +43,7 @@ fn main() {
     assert_eq!(iter_vec, vec![9, 10, 11]);
 
     stack.clear();
-    assert_eq!(stack.is_empty(), true);
+    assert!(stack.is_empty());
 
     println!("Running multi-threaded tests...");
     let stack = Arc::new(LockFreeStack::new());

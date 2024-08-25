@@ -11,5 +11,9 @@ name = "blocking_stack"
 version = "0.1.0"
 
 [[package]]
+name = "nonblocking_queue"
+version = "0.1.0"
+
+[[package]]
 name = "nonblocking_stack"
 version = "0.1.0"
