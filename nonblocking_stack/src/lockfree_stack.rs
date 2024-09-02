@@ -1,15 +1,13 @@
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
-use std::thread;
-use std::time::Duration;
 
 pub struct LockFreeStack<T> {
     head: AtomicPtr<Node<T>>,
 }
 
 struct Node<T> {
-    value: T,
     next: AtomicPtr<Node<T>>,
+    value: T,
 }
 
 impl<T> LockFreeStack<T> {
@@ -25,7 +23,7 @@ impl<T> LockFreeStack<T> {
             next: AtomicPtr::new(ptr::null_mut()),
         }));
 
-        let mut backoff = 1;
+        let mut backoff: u64 = 1;
         loop {
             let curr_head = self.head.load(Ordering::Acquire);
             unsafe { (*new_node).next.store(curr_head, Ordering::Relaxed) };
@@ -37,7 +35,10 @@ impl<T> LockFreeStack<T> {
                 break;
             }
 
-            thread::sleep(Duration::from_nanos(backoff));
+            for _ in 0..backoff {
+                std::thread::yield_now();
+            }
+
             backoff = backoff.saturating_mul(2);
         }
     }
@@ -56,14 +57,13 @@ impl<T> LockFreeStack<T> {
         while let Some(item) = items.pop() {
             let new_node = Box::into_raw(Box::new(Node {
                 value: item,
-                next: AtomicPtr::new(ptr::null_mut()),
+                next: AtomicPtr::new(new_head),
             }));
-
-            unsafe { (*new_node).next.store(new_head, Ordering::Relaxed) };
+            
             new_head = new_node;
         }
 
-        let mut backoff = 1;
+        let mut backoff: u64 = 1;
         loop {
             let curr_head = self.head.load(Ordering::Acquire);
             unsafe { (*tail).next.store(curr_head, Ordering::Relaxed) };
@@ -75,13 +75,16 @@ impl<T> LockFreeStack<T> {
                 break;
             }
 
-            thread::sleep(Duration::from_nanos(backoff));
+            for _ in 0..backoff {
+                std::thread::yield_now();
+            }
+
             backoff = backoff.saturating_mul(2);
         }
     }
 
     pub fn try_pop(&self) -> Option<T> {
-        let mut backoff = 1;
+        let mut backoff: u64 = 1;
         loop {
             let curr_head = self.head.load(Ordering::Acquire);
             if curr_head.is_null() {
@@ -98,14 +101,17 @@ impl<T> LockFreeStack<T> {
                 return Some(old_node.value);
             }
 
-            thread::sleep(Duration::from_nanos(backoff));
+            for _ in 0..backoff {
+                std::thread::yield_now();
+            }
+
             backoff = backoff.saturating_mul(2);
         }
     }
 
     pub fn try_pop_range(&self, count: usize) -> Vec<T> {
         let mut result = Vec::with_capacity(count);
-        let mut backoff = 1;
+        let mut backoff: u64 = 1;
         loop {
             let curr_head = self.head.load(Ordering::Acquire);
             if curr_head.is_null() {
@@ -133,9 +139,13 @@ impl<T> LockFreeStack<T> {
                 break;
             }
 
-            thread::sleep(Duration::from_nanos(backoff));
+            for _ in 0..backoff {
+                std::thread::yield_now();
+            }
+
             backoff = backoff.saturating_mul(2);
         }
+
         result
     }
 
@@ -199,7 +209,7 @@ where
 }
 
 pub struct Iter<'a, T> {
-    current: *mut Node<T>,
+    current: *const Node<T>,
     _marker: std::marker::PhantomData<&'a T>,
 }
 
@@ -212,7 +222,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
         } else {
             unsafe {
                 let node = &*self.current;
-                self.current = node.next.load(Ordering::Relaxed);
+                self.current = node.next.load(Ordering::Acquire) as *const Node<T>;
                 Some(&node.value)
             }
         }

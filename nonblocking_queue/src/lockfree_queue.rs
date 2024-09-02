@@ -8,14 +8,14 @@ pub struct LockFreeQueue<T> {
 
 #[derive(Debug)]
 struct Node<T> {
-    value: T,
     next: AtomicPtr<Node<T>>,
+    value: Option<T>,
 }
 
 impl<T> LockFreeQueue<T> {
     pub fn new() -> Self {
         let sentinel_node = Box::into_raw(Box::new(Node {
-            value: unsafe { std::mem::zeroed() },
+            value: None,
             next: AtomicPtr::new(std::ptr::null_mut()),
         }));
 
@@ -27,7 +27,7 @@ impl<T> LockFreeQueue<T> {
 
     pub fn enqueue(&self, value: T) {
         let node = Box::into_raw(Box::new(Node {
-            value,
+            value: Some(value),
             next: AtomicPtr::new(std::ptr::null_mut()),
         }));
 
@@ -42,21 +42,16 @@ impl<T> LockFreeQueue<T> {
                             .compare_exchange(next_node, node, Ordering::Release, Ordering::Relaxed)
                             .is_ok()
                     } {
-                        let _ = self.tail.compare_exchange(
-                            tail,
-                            node,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        );
+                        self.tail
+                            .compare_exchange(tail, node, Ordering::Release, Ordering::Relaxed)
+                            .ok();
+
                         return;
                     }
                 } else {
-                    let _ = self.tail.compare_exchange(
-                        tail,
-                        next_node,
-                        Ordering::Release,
-                        Ordering::Relaxed,
-                    );
+                    self.tail
+                        .compare_exchange(tail, next_node, Ordering::Release, Ordering::Relaxed)
+                        .ok();
                 }
             }
         }
@@ -71,11 +66,12 @@ impl<T> LockFreeQueue<T> {
                 if head == tail && next.is_null() {
                     return None;
                 }
-                let _ =
-                    self.tail
-                        .compare_exchange(tail, next, Ordering::Release, Ordering::Relaxed);
+
+                self.tail
+                    .compare_exchange(tail, next, Ordering::Release, Ordering::Relaxed)
+                    .ok();
             } else {
-                let val = unsafe { std::ptr::read(&(*next).value) };
+                let val = unsafe { (*next).value.take() };
                 if self
                     .head
                     .compare_exchange(head, next, Ordering::Release, Ordering::Relaxed)
@@ -85,7 +81,7 @@ impl<T> LockFreeQueue<T> {
                         drop(Box::from_raw(head));
                     }
 
-                    return Some(val);
+                    return val;
                 }
             }
         }
@@ -94,6 +90,7 @@ impl<T> LockFreeQueue<T> {
     pub fn is_empty(&self) -> bool {
         let head = self.head.load(Ordering::Acquire);
         let next = unsafe { (*head).next.load(Ordering::Acquire) };
+
         next.is_null()
     }
 
@@ -104,8 +101,9 @@ impl<T> LockFreeQueue<T> {
             if next.is_null() {
                 return None;
             }
+
             if head == self.head.load(Ordering::Relaxed) {
-                return Some(unsafe { &(*next).value });
+                return unsafe { (*next).value.as_ref() };
             }
         }
     }
@@ -142,7 +140,7 @@ impl<T: Clone> Clone for LockFreeQueue<T> {
         };
 
         while !current.is_null() {
-            new_queue.enqueue(unsafe { (*current).value.clone() });
+            new_queue.enqueue(unsafe { (*current).value.clone().unwrap() });
             current = unsafe { (*current).next.load(Ordering::Acquire) };
         }
 
@@ -171,7 +169,8 @@ impl<'a, T> Iterator for Iter<'a, T> {
             unsafe {
                 let result = &(*self.current).value;
                 self.current = (*self.current).next.load(Ordering::Acquire);
-                Some(result)
+
+                result.as_ref()
             }
         }
     }

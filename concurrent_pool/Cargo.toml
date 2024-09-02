@@ -1,7 +1,6 @@
 [package]
-name = "nonblocking_stack"
+name = "concurrent_pool"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-crossbeam-epoch = "0.9.18"
