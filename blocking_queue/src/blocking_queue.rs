@@ -1,101 +1,154 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
+/// A thread-safe blocking queue that allows pushing and popping elements with blocking semantics.
+///
+/// Multiple producers and consumers can safely operate concurrently.
+#[derive(Default)]
 pub struct BlockingQueue<T> {
-    queue: Arc<Mutex<VecDeque<T>>>,
+    inner: Arc<Inner<T>>,
+}
+
+#[derive(Default)]
+struct Inner<T> {
+    queue: Mutex<VecDeque<T>>,
     cvar: Condvar,
 }
 
 impl<T> BlockingQueue<T> {
+    /// Creates a new empty blocking queue.
+    #[inline]
     pub fn new() -> Self {
         Self {
-            queue: Arc::new(Mutex::new(VecDeque::new())),
-            cvar: Condvar::new(),
+            inner: Arc::new(Inner {
+                queue: Mutex::new(VecDeque::new()),
+                cvar: Condvar::new(),
+            }),
         }
     }
 
+    /// Creates a new blocking queue with preallocated capacity.
+    #[inline]
     pub fn _with_capacity(capacity: usize) -> Self {
         Self {
-            queue: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
-            cvar: Condvar::new(),
+            inner: Arc::new(Inner {
+                queue: Mutex::new(VecDeque::with_capacity(capacity)),
+                cvar: Condvar::new(),
+            }),
         }
     }
 
+    /// Pushes an item to the back of the queue and notifies one waiting thread.
+    #[inline]
     pub fn push(&self, item: T) {
-        let mut queue = self.queue.lock().unwrap();
+        let mut queue = self.inner.queue.lock().expect("mutex poisoned");
         queue.push_back(item);
-        self.cvar.notify_one();
+        drop(queue);
+        self.inner.cvar.notify_one();
     }
 
-    pub fn pop(&self) -> T {
-        let mut queue = self.queue.lock().unwrap();
-        while queue.is_empty() {
-            queue = self.cvar.wait(queue).unwrap();
-        }
+    /// Pops an item from the front of the queue, blocking if empty.
+    #[inline]
+    pub fn pop(&self) -> T
+    where
+        T: Clone,
+    {
+        let queue = self.inner.queue.lock().expect("mutex poisoned");
+        let mut queue = self
+            .inner
+            .cvar
+            .wait_while(queue, |q| q.is_empty())
+            .expect("mutex poisoned");
+
+        queue
+            .front()
+            .cloned()
+            .unwrap_or_else(|| panic!("BlockingQueue.pop() woke up but queue was empty"));
         queue.pop_front().unwrap()
     }
 
+    /// Attempts to pop an item from the queue without blocking.
+    #[inline]
     pub fn try_pop(&self) -> Option<T> {
-        self.queue.lock().unwrap().pop_front()
+        self.inner.queue.lock().ok()?.pop_front()
     }
 
+    /// Checks whether the queue is empty.
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.queue.lock().unwrap().is_empty()
+        self.inner.queue.lock().map_or(true, |q| q.is_empty())
     }
 
+    /// Returns the number of elements currently in the queue.
+    #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
-        self.queue.lock().unwrap().len()
+        self.inner.queue.lock().map_or(0, |q| q.len())
     }
 
+    /// Returns a clone of the front element without removing it.
+    #[inline]
     pub fn peek(&self) -> Option<T>
     where
         T: Clone,
     {
-        self.queue.lock().unwrap().front().cloned()
+        self.inner.queue.lock().ok()?.front().cloned()
     }
 
+    /// Clears all elements from the queue.
+    #[inline]
     pub fn clear(&self) {
-        self.queue.lock().unwrap().clear();
+        if let Ok(mut q) = self.inner.queue.lock() {
+            q.clear();
+        }
     }
 
+    /// Removes and returns all elements as a vector.
+    #[inline]
     pub fn drain(&self) -> Vec<T> {
-        self.queue.lock().unwrap().drain(..).collect()
+        self.inner
+            .queue
+            .lock()
+            .map(|mut q| q.drain(..).collect())
+            .unwrap_or_default()
     }
 
+    /// Returns the capacity of the internal [`VecDeque`].
+    #[inline]
+    #[must_use]
     pub fn capacity(&self) -> usize {
-        self.queue.lock().unwrap().capacity()
+        self.inner.queue.lock().map_or(0, |q| q.capacity())
     }
 
+    /// Checks whether the queue contains the given element.
+    #[inline]
     pub fn contains(&self, item: &T) -> bool
     where
         T: PartialEq,
     {
-        self.queue.lock().unwrap().contains(item)
+        self.inner.queue.lock().is_ok_and(|q| q.contains(item))
     }
 
-    pub fn reverse(&self) -> VecDeque<T>
+    /// Returns a reversed clone of the queue contents.
+    #[inline]
+    pub fn reversed(&self) -> VecDeque<T>
     where
         T: Clone,
     {
-        let mut queue = self.queue.lock().unwrap().clone();
+        let mut queue = self.inner.queue.lock().expect("mutex poisoned").clone();
         queue.make_contiguous().reverse();
 
         queue
     }
 }
 
-impl<T> Default for BlockingQueue<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T> Clone for BlockingQueue<T> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
-            queue: Arc::clone(&self.queue),
-            cvar: Condvar::new(),
+            inner: Arc::clone(&self.inner),
         }
     }
 }
@@ -105,7 +158,12 @@ where
     T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let queue = self.queue.lock().unwrap();
+        let queue = self
+            .inner
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+
         f.debug_struct("BlockingQueue")
             .field("queue", &*queue)
             .finish()
@@ -113,10 +171,12 @@ where
 }
 
 impl<T> From<Vec<T>> for BlockingQueue<T> {
-    fn from(v: Vec<T>) -> Self {
+    fn from(vec: Vec<T>) -> Self {
         Self {
-            queue: Arc::new(Mutex::new(VecDeque::from(v))),
-            cvar: Condvar::new(),
+            inner: Arc::new(Inner {
+                queue: Mutex::new(VecDeque::from(vec)),
+                cvar: Condvar::new(),
+            }),
         }
     }
 }

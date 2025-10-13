@@ -11,8 +11,8 @@ struct Node<T> {
 }
 
 impl<T> LockFreeStack<T> {
-    pub fn new() -> Self {
-        LockFreeStack {
+    pub const fn new() -> Self {
+        Self {
             head: AtomicPtr::new(ptr::null_mut()),
         }
     }
@@ -59,7 +59,7 @@ impl<T> LockFreeStack<T> {
                 value: item,
                 next: AtomicPtr::new(new_head),
             }));
-            
+
             new_head = new_node;
         }
 
@@ -222,7 +222,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
         } else {
             unsafe {
                 let node = &*self.current;
-                self.current = node.next.load(Ordering::Acquire) as *const Node<T>;
+                self.current = node.next.load(Ordering::Acquire).cast_const();
                 Some(&node.value)
             }
         }

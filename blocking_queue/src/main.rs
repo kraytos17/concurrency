@@ -7,20 +7,20 @@ fn main() {
     println!("Testing Single-threaded BlockingQueue...");
 
     let queue = BlockingQueue::new();
-    println!("Created new queue: {:?}", queue);
+    println!("Created new queue: {queue:?}");
 
     queue.push(1);
     queue.push(2);
     queue.push(3);
-    println!("After pushing 1, 2, 3: {:?}", queue);
+    println!("After pushing 1, 2, 3: {queue:?}");
 
     assert_eq!(queue.pop(), 1);
     assert_eq!(queue.pop(), 2);
-    println!("After popping twice: {:?}", queue);
+    println!("After popping twice: {queue:?}");
 
     assert_eq!(queue.try_pop(), Some(3));
     assert_eq!(queue.try_pop(), None);
-    println!("After try_pop: {:?}", queue);
+    println!("After try_pop: {queue:?}");
 
     assert!(queue.is_empty());
     assert_eq!(queue.len(), 0);
@@ -36,7 +36,7 @@ fn main() {
 
     queue.clear();
     assert!(queue.is_empty());
-    println!("Cleared queue: {:?}", queue);
+    println!("Cleared queue: {queue:?}");
 
     queue.push(5);
     queue.push(6);
@@ -44,7 +44,7 @@ fn main() {
     let drained = queue.drain();
     assert_eq!(drained, vec![5, 6, 7]);
     assert!(queue.is_empty());
-    println!("Drained: {:?}, Queue now: {:?}", drained, queue);
+    println!("Drained: {drained:?}, Queue now: {queue:?}");
     println!("Capacity: {}", queue.capacity());
 
     queue.push(8);
@@ -57,25 +57,21 @@ fn main() {
         queue.contains(&10)
     );
 
-    let reversed = queue.reverse();
+    let reversed = queue.reversed();
     assert_eq!(reversed.clone().into_iter().collect::<Vec<_>>(), vec![9, 8]);
-    println!("Reversed: {:?}", reversed);
+    println!("Reversed: {reversed:?}");
 
     let cloned_queue = queue.clone();
     assert_eq!(queue.peek(), cloned_queue.peek());
-    println!(
-        "Original queue: {:?}, Cloned queue: {:?}",
-        queue, cloned_queue
-    );
+    println!("Original queue: {queue:?}, Cloned queue: {cloned_queue:?}");
 
     println!("Testing Multi-threaded BlockingQueue");
     let queue = Arc::new(BlockingQueue::new());
     let queue_clone = Arc::clone(&queue);
-
     let producer = thread::spawn(move || {
         for i in 0..5 {
             queue_clone.push(i);
-            println!("Produced: {}", i);
+            println!("Produced: {i}");
             thread::sleep(Duration::from_millis(100));
         }
     });
@@ -83,7 +79,7 @@ fn main() {
     let consumer = thread::spawn(move || {
         for _ in 0..5 {
             let item = queue.pop();
-            println!("Consumed: {}", item);
+            println!("Consumed: {item}");
             thread::sleep(Duration::from_millis(150));
         }
     });
@@ -92,14 +88,12 @@ fn main() {
     consumer.join().unwrap();
 
     println!("Multi-threaded test completed.");
-
     let queue = Arc::new(BlockingQueue::new());
     let queue_clone = Arc::clone(&queue);
-
     let blocking_thread = thread::spawn(move || {
         println!("Waiting for item...");
         let item = queue_clone.pop();
-        println!("Received item: {}", item);
+        println!("Received item: {item}");
     });
 
     thread::sleep(Duration::from_secs(1));
