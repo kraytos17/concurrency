@@ -1,78 +1,143 @@
-mod concurrent_pool;
-
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
+mod concurrent_pool;
 use concurrent_pool::{ConcurrentPool, PoolError};
 
 fn main() {
+    println!("=== ConcurrentPool Demonstration ===");
     let pool: ConcurrentPool<i32> = ConcurrentPool::new();
-    println!("Pushing elements to the pool");
+
+    println!("\nPushing single elements...");
     for i in 0..5 {
         pool.push(i).unwrap();
-        println!("Pushed: {}", i);
+        println!("  pushed {i}");
     }
 
-    println!("Pool size: {}", pool.len());
-
-    if let Some(peeked) = pool.peek() {
-        println!("Peeked element: {}", peeked);
+    println!("len after pushes = {}", pool.len());
+    if let Some(x) = pool.peek_clone() {
+        println!("peek_clone() = {x}");
     }
 
-    println!("Popping elements from the pool");
-    while let Ok(item) = pool.pop() {
-        println!("Popped: {}", item);
+    println!("\nPopping all elements...");
+    while let Ok(v) = pool.pop() {
+        println!("  popped {v}");
     }
 
-    println!("Is pool empty? {}", pool.is_empty());
-
+    println!("is_empty() = {}", pool.is_empty());
     match pool.pop() {
-        Ok(item) => println!("Popped: {}", item),
-        Err(PoolError::Empty) => println!("Pool is empty"),
+        Ok(v) => println!("Unexpected: popped {v}"),
+        Err(PoolError::Empty) => println!("pop() correctly returned PoolError::Empty"),
     }
 
-    let range: Vec<i32> = (0..10).collect();
-    let pushed = pool.push_range(range);
-    println!("Pushed {} elements", pushed);
-    let popped = pool.pop_range(5);
-    println!("Popped range: {:?}", popped);
-    let pool_arc = std::sync::Arc::new(pool);
-    let push_thread = {
-        let pool = pool_arc.clone();
-        thread::spawn(move || {
-            for i in 100..110 {
-                pool.push(i).unwrap();
-                thread::sleep(Duration::from_millis(10));
-            }
-        })
-    };
+    println!("\nPushing range of 10 elements...");
+    let pushed = pool.push_range(10..20);
+    println!("push_range() pushed {pushed}, len = {}", pool.len());
 
-    let pop_thread = {
-        let pool = pool_arc.clone();
-        thread::spawn(move || {
-            for _ in 0..15 {
-                if let Some(item) = pool.try_pop() {
-                    println!("Popped in concurrent thread: {}", item);
+    println!("Pop 5 elements using pop_range...");
+    let batch = pool.pop_range(5);
+    println!("  popped = {batch:?}");
+    println!("len now = {}", pool.len());
+
+    println!("\nDraining rest via try_pop...");
+    while let Some(v) = pool.try_pop() {
+        println!("  try_pop() = {v}");
+    }
+
+    println!("is_empty() = {}", pool.is_empty());
+
+    println!("\nTesting unsafe peek_ref...");
+    pool.push_range(vec![111, 222, 333]);
+    unsafe {
+        if let Some(r) = pool.peek_ref() {
+            println!("peek_ref() = {r}");
+        }
+    }
+
+    println!("\nIterating over pool contents:");
+    for v in pool.iter() {
+        println!("  iter saw {v}");
+    }
+
+    println!("Draining using drain()...");
+    for v in pool.drain() {
+        println!("  drained {v}");
+    }
+    println!("len after drain = {}", pool.len());
+
+    pool.push_range(1..=5);
+    println!("\nlen before clear = {}", pool.len());
+    pool.clear();
+    println!("len after clear = {}", pool.len());
+
+    println!("\nBuilding pool from iterator...");
+    let new_pool: ConcurrentPool<i32> = (50..55).collect();
+    println!("new_pool len = {}", new_pool.len());
+    println!("Debug: {new_pool:?}");
+
+    println!("\nIterating new_pool:");
+    for x in new_pool.iter() {
+        println!("  {x}");
+    }
+
+    println!("\n=== Concurrent stress demo ===");
+    const PRODUCERS: usize = 4;
+    const CONSUMERS: usize = 4;
+    const ITEMS: usize = 1000;
+
+    let pool_arc = Arc::new(ConcurrentPool::new());
+    let barrier = Arc::new(Barrier::new(PRODUCERS + CONSUMERS));
+    let collected = Arc::new(Mutex::new(Vec::new()));
+
+    let mut threads = Vec::new();
+    for p in 0..PRODUCERS {
+        let pool = Arc::clone(&pool_arc);
+        let barrier = Arc::clone(&barrier);
+        threads.push(thread::spawn(move || {
+            barrier.wait();
+            for i in 0..ITEMS {
+                pool.push(p * 1000 + i).unwrap();
+                if i % 200 == 0 {
+                    thread::sleep(Duration::from_millis(1));
                 }
-                thread::sleep(Duration::from_millis(15));
             }
-        })
-    };
-
-    push_thread.join().unwrap();
-    pop_thread.join().unwrap();
-
-    println!("Final pool size: {}", pool_arc.len());
-    println!("Final pool contents:");
-    while let Ok(item) = pool_arc.pop() {
-        println!("{}", item);
+        }));
     }
 
-    pool_arc.clear();
-    println!("Pool cleared. Is empty? {}", pool_arc.is_empty());
+    for _ in 0..CONSUMERS {
+        let pool = Arc::clone(&pool_arc);
+        let barrier = Arc::clone(&barrier);
+        let collected = Arc::clone(&collected);
+        threads.push(thread::spawn(move || {
+            barrier.wait();
+            loop {
+                if let Some(v) = pool.try_pop() {
+                    collected.lock().unwrap().push(v);
+                } else {
+                    if pool.is_empty() {
+                        break;
+                    }
+                    thread::yield_now();
+                }
+            }
+        }));
+    }
 
-    let vec = vec![1, 2, 3, 4, 5];
-    let new_pool: ConcurrentPool<i32> = vec.into_iter().collect();
-    println!("New pool from iterator, size: {}", new_pool.len());
-    println!("Debug output of pool: {:?}", new_pool);
+    for t in threads {
+        t.join().unwrap();
+    }
+
+    let total = collected.lock().unwrap().len();
+    println!(
+        "Concurrent phase complete — popped {} elements (expected {}).",
+        total,
+        PRODUCERS * ITEMS
+    );
+
+    println!("Final len = {}", pool_arc.len());
+    pool_arc.clear();
+    println!("After clear: is_empty() = {}", pool_arc.is_empty());
+
+    println!("\n=== Done ===");
 }
